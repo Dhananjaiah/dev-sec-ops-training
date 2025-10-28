@@ -1,0 +1,69 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'kafka-platform/infra/terraform/**'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, stage, prod]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Terraform Init
+        working-directory: kafka-platform/infra/terraform/environments/${{ matrix.environment }}
+        run: terraform init
+      
+      - name: Terraform Format
+        working-directory: kafka-platform/infra/terraform/environments/${{ matrix.environment }}
+        run: terraform fmt -check
+      
+      - name: Terraform Validate
+        working-directory: kafka-platform/infra/terraform/environments/${{ matrix.environment }}
+        run: terraform validate
+      
+      - name: Terraform Plan
+        working-directory: kafka-platform/infra/terraform/environments/${{ matrix.environment }}
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+      
+      - name: Comment PR with Plan
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('kafka-platform/infra/terraform/environments/${{ matrix.environment }}/plan.txt', 'utf8');
+            const truncatedPlan = plan.length > 65000 ? plan.substring(0, 65000) + '\n... (truncated)' : plan;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Terraform Plan - ${{ matrix.environment }}\n\`\`\`hcl\n${truncatedPlan}\n\`\`\``
+            })

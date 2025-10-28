@@ -1,0 +1,140 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaMirrorMaker2
+metadata:
+  name: mirrormaker2
+  namespace: kafka
+spec:
+  version: 3.6.0
+  replicas: 2
+  connectCluster: "target"
+  
+  clusters:
+    - alias: "source"
+      bootstrapServers: source-kafka-kafka-bootstrap:9092
+      tls:
+        trustedCertificates:
+          - secretName: source-kafka-cluster-ca-cert
+            certificate: ca.crt
+      authentication:
+        type: scram-sha-512
+        username: mirrormaker-source
+        passwordSecret:
+          secretName: mirrormaker-source
+          password: password
+      config:
+        config.storage.replication.factor: 3
+        offset.storage.replication.factor: 3
+        status.storage.replication.factor: 3
+    
+    - alias: "target"
+      bootstrapServers: prod-kafka-kafka-bootstrap:9092
+      tls:
+        trustedCertificates:
+          - secretName: prod-kafka-cluster-ca-cert
+            certificate: ca.crt
+      authentication:
+        type: scram-sha-512
+        username: mirrormaker-target
+        passwordSecret:
+          secretName: mirrormaker-target
+          password: password
+      config:
+        config.storage.replication.factor: 3
+        offset.storage.replication.factor: 3
+        status.storage.replication.factor: 3
+        offset.storage.topic: mirrormaker2-cluster-offsets
+        config.storage.topic: mirrormaker2-cluster-configs
+        status.storage.topic: mirrormaker2-cluster-status
+  
+  mirrors:
+    - sourceCluster: "source"
+      targetCluster: "target"
+      sourceConnector:
+        tasksMax: 4
+        config:
+          # Replicate all topics except internal topics
+          topics: ".*"
+          topics.blacklist: ".*[\\-\\.]internal, .*\\.replica, __.*"
+          
+          # Replication settings
+          replication.factor: 3
+          offset-syncs.topic.replication.factor: 3
+          
+          # Consumer settings
+          consumer.max.poll.records: 500
+          consumer.fetch.max.bytes: 52428800
+          
+          # Performance
+          refresh.topics.enabled: true
+          refresh.topics.interval.seconds: 60
+          sync.topic.configs.enabled: true
+          sync.topic.acls.enabled: false
+          
+          # Emit heartbeats
+          emit.heartbeats.enabled: true
+          emit.heartbeats.interval.seconds: 5
+      
+      heartbeatConnector:
+        config:
+          heartbeats.topic.replication.factor: 3
+      
+      checkpointConnector:
+        config:
+          checkpoints.topic.replication.factor: 3
+          sync.group.offsets.enabled: true
+          sync.group.offsets.interval.seconds: 60
+          emit.checkpoints.enabled: true
+          emit.checkpoints.interval.seconds: 60
+  
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: "1000m"
+    limits:
+      memory: 4Gi
+      cpu: "2000m"
+  
+  jvmOptions:
+    -Xms: 1024m
+    -Xmx: 2048m
+  
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: kafka-metrics
+        key: mirrormaker2-metrics.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: kafka
+data:
+  kafka-connect-metrics.yaml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: kafka.connect<type=(.+), client-id=(.+)><>(.+)
+        name: kafka_connect_$1
+        labels:
+          client_id: "$2"
+        value: $3
+      - pattern: kafka.connect<type=connect-worker-metrics><>([^:]+)
+        name: kafka_connect_worker_$1
+        
+  mirrormaker2-metrics.yaml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: kafka.connect.mirror<type=(.+), target=(.+), topic=(.+), partition=(.+)><>(.+)
+        name: kafka_connect_mirror_$1
+        labels:
+          target: "$2"
+          topic: "$3"
+          partition: "$4"
+        value: $5
+      - pattern: kafka.connect.mirror<type=(.+), source=(.+), target=(.+)><>(.+)
+        name: kafka_connect_mirror_$1
+        labels:
+          source: "$2"
+          target: "$3"
+        value: $4
