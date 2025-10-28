@@ -11,3 +11,10 @@ yarn-error.log
 web/public/mockServiceWorker.js
 web/types/graphql.d.ts
 api/types/graphql.d.ts
+
+# Linux course lab temporary files
+docs/labs/*.tmp
+docs/labs/*.log
+docs/labs/*.pcap
+*.swp
+*~
