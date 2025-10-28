@@ -1,0 +1,233 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: prod-kafka
+  namespace: kafka
+spec:
+  # KRaft mode configuration (no ZooKeeper)
+  kraft:
+    metadata:
+      type: ephemeral  # Use persistent-claim for production
+      replicas: 3
+      # Rack awareness for high availability
+      rack:
+        topologyKey: topology.kubernetes.io/zone
+      resources:
+        requests:
+          memory: 2Gi
+          cpu: "1000m"
+        limits:
+          memory: 4Gi
+          cpu: "2000m"
+      jvmOptions:
+        -Xms: 1024m
+        -Xmx: 2048m
+      metricsConfig:
+        type: jmxPrometheusExporter
+        valueFrom:
+          configMapKeyRef:
+            name: kafka-metrics
+            key: kafka-controller-metrics.yaml
+
+  # Kafka broker configuration
+  kafka:
+    version: 3.6.0
+    replicas: 3
+    
+    # Listener configuration
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: true
+        authentication:
+          type: scram-sha-512
+      - name: external
+        port: 9094
+        type: loadbalancer
+        tls: true
+        authentication:
+          type: scram-sha-512
+        configuration:
+          bootstrap:
+            loadBalancerIP: null  # Will be assigned by cloud provider
+            annotations:
+              service.beta.kubernetes.io/aws-load-balancer-type: nlb
+              service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+          brokers:
+            - broker: 0
+              advertisedHost: kafka-0.example.com
+            - broker: 1
+              advertisedHost: kafka-1.example.com
+            - broker: 2
+              advertisedHost: kafka-2.example.com
+
+    # Authorization
+    authorization:
+      type: simple
+      superUsers:
+        - admin
+
+    # Broker configuration
+    config:
+      # Core settings
+      num.network.threads: 8
+      num.io.threads: 16
+      socket.send.buffer.bytes: 102400
+      socket.receive.buffer.bytes: 102400
+      socket.request.max.bytes: 104857600
+      
+      # Log settings
+      log.retention.hours: 168  # 7 days
+      log.segment.bytes: 1073741824  # 1GB
+      log.retention.check.interval.ms: 300000
+      log.cleaner.enable: true
+      log.cleanup.policy: delete
+      compression.type: producer
+      
+      # Replication settings
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      replica.lag.time.max.ms: 30000
+      unclean.leader.election.enable: false
+      auto.create.topics.enable: false
+      
+      # Performance tuning
+      num.replica.fetchers: 4
+      replica.fetch.max.bytes: 1048576
+      
+      # Transaction settings
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      
+      # Security
+      ssl.cipher.suites: TLS_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256
+      ssl.protocol: TLSv1.3
+      ssl.enabled.protocols: TLSv1.3,TLSv1.2
+      
+      # Quotas
+      quota.producer.default: 10485760  # 10 MB/s
+      quota.consumer.default: 20971520  # 20 MB/s
+
+    # Storage configuration
+    storage:
+      type: jbod
+      volumes:
+        - id: 0
+          type: persistent-claim
+          size: 2Ti
+          class: gp3
+          deleteClaim: false
+
+    # Resource allocation
+    resources:
+      requests:
+        memory: 8Gi
+        cpu: "2000m"
+      limits:
+        memory: 16Gi
+        cpu: "4000m"
+
+    # JVM options
+    jvmOptions:
+      -Xms: 4096m
+      -Xmx: 8192m
+      -XX:
+        +UseG1GC: true
+        MaxGCPauseMillis: 20
+        InitiatingHeapOccupancyPercent: 35
+        G1HeapRegionSize: 16m
+
+    # Rack awareness for high availability
+    rack:
+      topologyKey: topology.kubernetes.io/zone
+
+    # Metrics configuration
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-broker-metrics.yaml
+
+  # Entity Operator (Topic & User management)
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: "200m"
+        limits:
+          memory: 1Gi
+          cpu: "500m"
+    userOperator:
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: "200m"
+        limits:
+          memory: 1Gi
+          cpu: "500m"
+
+  # Cruise Control for cluster rebalancing
+  cruiseControl:
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: cruise-control-metrics.yaml
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "500m"
+      limits:
+        memory: 4Gi
+        cpu: "1000m"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: kafka
+data:
+  kafka-broker-metrics.yaml: |
+    lowercaseOutputName: true
+    rules:
+      # Broker metrics
+      - pattern: kafka.server<type=(.+), name=(.+)><>(.+)
+        name: kafka_server_$1_$2
+        labels:
+          metric_name: "$2"
+        value: $3
+      # Network request metrics
+      - pattern: kafka.network<type=RequestMetrics, name=(.+), request=(.+)><>(.+)
+        name: kafka_network_requestmetrics_$1
+        labels:
+          request: "$2"
+        value: $3
+      # Log metrics
+      - pattern: kafka.log<type=Log, name=(.+), topic=(.+), partition=(.+)><>(.+)
+        name: kafka_log_$1
+        labels:
+          topic: "$2"
+          partition: "$3"
+        value: $4
+      # Controller metrics
+      - pattern: kafka.controller<type=(.+), name=(.+)><>(.+)
+        name: kafka_controller_$1_$2
+        value: $3
+        
+  kafka-controller-metrics.yaml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: kafka.controller<type=(.+), name=(.+)><>(.+)
+        name: kafka_controller_$1_$2
+        value: $3
+        
+  cruise-control-metrics.yaml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: kafka.cruisecontrol<name=(.+)><>(.+)
+        name: kafka_cruisecontrol_$1
+        value: $2

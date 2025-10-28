@@ -1,0 +1,58 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namespace: kafka
+
+# Patches for dev environment (smaller, single-AZ)
+patches:
+  - target:
+      kind: Kafka
+      name: prod-kafka
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: dev-kafka
+      - op: replace
+        path: /spec/kafka/replicas
+        value: 1
+      - op: replace
+        path: /spec/kraft/metadata/replicas
+        value: 1
+      - op: replace
+        path: /spec/kafka/storage/volumes/0/size
+        value: 100Gi
+      - op: replace
+        path: /spec/kafka/resources/requests/memory
+        value: 4Gi
+      - op: replace
+        path: /spec/kafka/resources/limits/memory
+        value: 8Gi
+      - op: remove
+        path: /spec/kafka/rack
+      - op: remove
+        path: /spec/kraft/metadata/rack
+
+  - target:
+      kind: KafkaConnect
+      name: kafka-connect
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/bootstrapServers
+        value: dev-kafka-kafka-bootstrap:9092
+
+  - target:
+      kind: Deployment
+      name: schema-registry
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: dev-kafka-kafka-bootstrap:9092

@@ -1,0 +1,192 @@
+groups:
+  - name: kafka-broker-alerts
+    interval: 30s
+    rules:
+      # Broker availability
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka-broker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka broker is down"
+          description: "Kafka broker {{ $labels.instance }} has been down for more than 2 minutes."
+          runbook: "https://github.com/yourorg/kafka-platform/docs/runbooks/broker-replacement.md"
+
+      # Under-replicated partitions
+      - alert: KafkaUnderReplicatedPartitions
+        expr: kafka_server_replicamanager_underreplicatedpartitions > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka has under-replicated partitions"
+          description: "Broker {{ $labels.instance }} has {{ $value }} under-replicated partitions for 5+ minutes."
+          runbook: "https://github.com/yourorg/kafka-platform/docs/runbooks/partition-rebalance.md"
+
+      # Offline partitions
+      - alert: KafkaOfflinePartitions
+        expr: kafka_controller_kafkacontroller_offlinepartitionscount > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka has offline partitions"
+          description: "Cluster has {{ $value }} offline partitions. Data loss may occur!"
+          runbook: "https://github.com/yourorg/kafka-platform/docs/runbooks/disaster-recovery.md"
+
+      # ISR shrink rate
+      - alert: KafkaISRShrinkRateHigh
+        expr: rate(kafka_server_replicamanager_isrshrinks_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High ISR shrink rate detected"
+          description: "ISR is shrinking at {{ $value | humanize }} per second on {{ $labels.instance }}."
+
+      # Active controller
+      - alert: KafkaNoActiveController
+        expr: sum(kafka_controller_kafkacontroller_activecontrollercount) != 1
+        for: 2m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "No active Kafka controller"
+          description: "Cluster has {{ $value }} active controllers (expected: 1). Leader election may be stuck."
+
+      # Disk usage
+      - alert: KafkaDiskUsageHigh
+        expr: |
+          (1 - (node_filesystem_avail_bytes{mountpoint="/var/lib/kafka"} 
+          / node_filesystem_size_bytes{mountpoint="/var/lib/kafka"})) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka disk usage is high"
+          description: "Disk usage on {{ $labels.instance }} is {{ $value | humanize }}%"
+
+      - alert: KafkaDiskUsageCritical
+        expr: |
+          (1 - (node_filesystem_avail_bytes{mountpoint="/var/lib/kafka"} 
+          / node_filesystem_size_bytes{mountpoint="/var/lib/kafka"})) * 100 > 90
+        for: 2m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka disk usage is critical"
+          description: "Disk usage on {{ $labels.instance }} is {{ $value | humanize }}%. Immediate action required!"
+
+      # Network handler idle
+      - alert: KafkaNetworkHandlerIdleLow
+        expr: kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent < 0.2
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka network handlers are busy"
+          description: "Network handler idle percentage is {{ $value | humanizePercentage }} on {{ $labels.instance }}."
+
+      # Request queue
+      - alert: KafkaRequestQueueHigh
+        expr: kafka_network_requestchannel_requestqueuesize > 100
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka request queue is high"
+          description: "Request queue size is {{ $value }} on {{ $labels.instance }}."
+
+      # GC pause time
+      - alert: KafkaHighGCPauseTime
+        expr: |
+          rate(jvm_gc_collection_seconds_sum{job="kafka-broker"}[5m])
+          / rate(jvm_gc_collection_seconds_count{job="kafka-broker"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High GC pause time"
+          description: "Average GC pause time is {{ $value | humanizeDuration }} on {{ $labels.instance }}."
+
+      # Memory usage
+      - alert: KafkaHeapMemoryUsageHigh
+        expr: |
+          (jvm_memory_bytes_used{area="heap",job="kafka-broker"} 
+          / jvm_memory_bytes_max{area="heap",job="kafka-broker"}) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka heap memory usage is high"
+          description: "Heap memory usage is {{ $value | humanize }}% on {{ $labels.instance }}."
+
+      # Failed produce requests
+      - alert: KafkaFailedProduceRequests
+        expr: |
+          rate(kafka_server_brokertopicmetrics_failedproducerequests_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Failed produce requests detected"
+          description: "{{ $value | humanize }} failed produce requests/sec on {{ $labels.instance }}."
+
+      # Failed fetch requests
+      - alert: KafkaFailedFetchRequests
+        expr: |
+          rate(kafka_server_brokertopicmetrics_failedfetchrequests_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Failed fetch requests detected"
+          description: "{{ $value | humanize }} failed fetch requests/sec on {{ $labels.instance }}."
+
+      # Leader election rate
+      - alert: KafkaLeaderElectionRateHigh
+        expr: rate(kafka_controller_controllerstats_leaderelectionrateandtimems_count[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High leader election rate"
+          description: "Leader elections occurring at {{ $value | humanize }}/sec. Cluster may be unstable."
+
+      # Request latency
+      - alert: KafkaProduceLatencyHigh
+        expr: |
+          kafka_network_requestmetrics_totaltimems{request="Produce",quantile="0.99"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High produce latency"
+          description: "P99 produce latency is {{ $value }}ms on {{ $labels.instance }}."
+
+      - alert: KafkaFetchLatencyHigh
+        expr: |
+          kafka_network_requestmetrics_totaltimems{request="Fetch",quantile="0.99"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High fetch latency"
+          description: "P99 fetch latency is {{ $value }}ms on {{ $labels.instance }}."
